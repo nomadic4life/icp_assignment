@@ -1,3 +1,34 @@
+type Skill = record {
+    id: nat32;
+    name: text;
+};
+
+type ApplicantProfile = record {
+    "id": opt principal;
+    "first_name": text;
+    "last_name": text;
+    "nickname": text;
+    "bio": text;
+    "created_at": nat64;
+    "skills": Skill;
+};
+
+type CompanyProfile = record {
+    "id": opt principal;
+    "name": text;
+    "logo": text;
+    "twitter": text;
+    "website": text;
+    "created_at": nat64;
+};
+
+
+
 service : {
-    "greet": (text) -> (text) query;
-}
+    "get_self": () -> (ApplicantProfile) query;
+    "get_principal": () -> (principal) query;
+    "create_applicant_profile": (ApplicantProfile) -> (nat8);
+    "create_company_profile": (CompanyProfile) -> (nat8);
+    "get_company": (principal) -> (opt CompanyProfile) query;
+    "push": () -> (opt text);
+};
