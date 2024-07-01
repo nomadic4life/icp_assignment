@@ -1,0 +1,27 @@
+{
+  "canisters": {
+    "assignment_backend": {
+      "candid": "src/assignment_backend/assignment_backend.did",
+      "package": "assignment_backend",
+      "type": "rust"
+    },
+    "assignment_frontend": {
+      "dependencies": [
+        "assignment_backend"
+      ],
+      "source": [
+        "src/assignment_frontend/dist"
+      ],
+      "type": "assets",
+      "workspace": "assignment_frontend"
+    }
+  },
+  "defaults": {
+    "build": {
+      "args": "",
+      "packtool": ""
+    }
+  },
+  "output_env_file": ".env",
+  "version": 1
+}
