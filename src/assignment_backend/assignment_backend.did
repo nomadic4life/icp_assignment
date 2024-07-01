@@ -25,10 +25,8 @@ type CompanyProfile = record {
 
 
 service : {
-    "get_self": () -> (ApplicantProfile) query;
     "get_principal": () -> (principal) query;
     "create_applicant_profile": (ApplicantProfile) -> (nat8);
     "create_company_profile": (CompanyProfile) -> (nat8);
     "get_company": (principal) -> (opt CompanyProfile) query;
-    "push": () -> (opt text);
 };
