@@ -195,6 +195,36 @@ fn create_job(params: CreateJob, skills: Vec<Skill>) {
 }
 
 #[update]
+fn cancel_job(id: u128) {
+    let principal_id = ic_cdk::api::caller();
+
+    JOB_STORE.with(|job_store| {
+        let job = job_store.borrow();
+        let job = job.get(&id);
+
+        if job.is_none() {
+            // job doesn't exist
+            return;
+        }
+
+        let job = job.unwrap().to_owned();
+
+        if job.company_id.unwrap() != principal_id {
+            // invalid authority
+            return;
+        }
+
+        job_store.borrow_mut().insert(
+            id,
+            Job {
+                status: JobStatus::Canceled,
+                ..job
+            },
+        );
+    });
+}
+
+#[update]
 fn apply_to_job(input: Application) -> CreationStatus {
     let principal_id = ic_cdk::api::caller();
     // should use flag
