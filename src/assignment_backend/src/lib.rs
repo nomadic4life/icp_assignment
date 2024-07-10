@@ -32,13 +32,58 @@ thread_local! {
     static SKILL_STORE: RefCell<SkillStore> = RefCell::default();
 }
 
+fn update_skill(skills: Vec<Skill>) -> BTreeMap<u16, Skill> {
+    let mut updated_skills = BTreeMap::<u16, Skill>::new();
+
+    // not handling validations of skills,
+    // verify by id is easy, but to verify to string via on chain would require a bit of work with some limits imposed.
+    // because it could be an attacked vector if no limits.
+    // could use a different skill type for input and for storing, so don't need to store id as an option
+    SKILL_STORE.with(|skill_store| {
+        for skill in skills.iter() {
+            SKILL_ID_STORE.with(|id_store| {
+                if !skill.id.is_none() {
+                    updated_skills.insert(skill.id.unwrap(), skill.clone());
+                    return;
+                }
+
+                // fail safe to not overwrite existing skills if overflow
+                if id_store.get() != u16::MAX {
+                    return;
+                }
+
+                let id = id_store.get();
+                skill_store.borrow_mut().insert(
+                    id.to_owned(),
+                    Skill {
+                        id: Some(id.to_owned()),
+                        name: skill.name.clone(),
+                    },
+                );
+
+                updated_skills.insert(
+                    id.to_owned(),
+                    Skill {
+                        id: Some(id.to_owned()),
+                        name: skill.name.clone(),
+                    },
+                );
+
+                id_store.set(id + 1);
+            });
+        }
+    });
+
+    return updated_skills;
+}
+
 #[query]
 fn get_principal() -> Principal {
     // get principle is used for testing
     ic_cdk::api::caller()
 }
 
-fn guard_create_user() -> Result<(), String> {
+fn is_valid_create_user() -> Result<(), String> {
     let principal_id = ic_cdk::api::caller();
 
     let mut is_exist = false;
@@ -66,49 +111,9 @@ fn guard_create_user() -> Result<(), String> {
     Ok(())
 }
 
-#[update(guard = "guard_create_user")]
+#[update(guard = "is_valid_create_user")]
 fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) {
     let principal_id = ic_cdk::api::caller();
-    let mut applicant_skills = BTreeMap::<u16, Skill>::new();
-
-    // not handling validations of skills,
-    // verify by id is easy, but to verify to string via on chain would require a bit of work with some limits imposed.
-    // because it could be an attacked vector if no limits.
-    // could use a different skill type for input and for storing, so don't need to store id as an option
-    SKILL_STORE.with(|skill_store| {
-        for skill in skills.iter() {
-            SKILL_ID_STORE.with(|id_store| {
-                if !skill.id.is_none() {
-                    applicant_skills.insert(skill.id.unwrap(), skill.clone());
-                    return;
-                }
-
-                // fail safe to not overwrite existing skills if overflow
-                if id_store.get() != u16::MAX {
-                    return;
-                }
-
-                let id = id_store.get();
-                skill_store.borrow_mut().insert(
-                    id.to_owned(),
-                    Skill {
-                        id: Some(id.to_owned()),
-                        name: skill.name.clone(),
-                    },
-                );
-
-                applicant_skills.insert(
-                    id.to_owned(),
-                    Skill {
-                        id: Some(id.to_owned()),
-                        name: skill.name.clone(),
-                    },
-                );
-
-                id_store.set(id + 1);
-            });
-        }
-    });
 
     APPLICANT_PROFILE_STORE.with(|profile_store| {
         profile_store.borrow_mut().insert(
@@ -122,13 +127,13 @@ fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) {
 
                 // blocktime() -> is this a thing? will come back to this later
                 created_at: time(),
-                skills: applicant_skills,
+                skills: update_skill(skills),
             },
         );
     });
 }
 
-#[update(guard = "guard_create_user")]
+#[update(guard = "is_valid_create_user")]
 fn create_company_profile(params: CompanyParams) {
     let principal_id = ic_cdk::api::caller();
 
@@ -149,32 +154,37 @@ fn create_company_profile(params: CompanyParams) {
     });
 }
 
-#[update]
-fn create_job(input: CreateJob) -> CreationStatus {
+fn is_valid_company() -> Result<(), String> {
     let principal_id = ic_cdk::api::caller();
-    let mut is_exist = false;
 
+    let mut is_exist = false;
     COMPANY_PROFILE_STORE.with(|profile_store| {
         if !profile_store.borrow().get(&principal_id).is_none() {
             is_exist = true;
-            return;
         };
     });
 
     if !is_exist {
-        return CreationStatus::Fail;
-    }
+        return Err(String::from("Invalid User"));
+    };
+
+    Ok(())
+}
+
+#[update(guard = "is_valid_company")]
+fn create_job(params: CreateJob, skills: Vec<Skill>) {
+    let principal_id = ic_cdk::api::caller();
 
     JOB_ID_STORE.with(|id| {
         JOB_STORE.with(|job_store| {
             let job = Job {
                 id: id.get(),
                 company_id: Some(principal_id),
-                position: input.position,
-                description: input.description,
-                bounty: input.bounty,
+                position: params.position,
+                description: params.description,
+                bounty: params.bounty,
                 status: JobStatus::Open,
-                // required_skills: input.required_skills.clone(),
+                required_skills: update_skill(skills),
             };
 
             id.set(id.get() + 1);
@@ -182,8 +192,6 @@ fn create_job(input: CreateJob) -> CreationStatus {
             job_store.borrow_mut().insert(id.get(), job);
         });
     });
-
-    return CreationStatus::Success;
 }
 
 #[update]
@@ -325,7 +333,7 @@ struct Job {
     description: String,
     bounty: u128,
     status: JobStatus,
-    // required_skills: Vec<Skill>,
+    required_skills: BTreeMap<u16, Skill>,
 }
 
 #[derive(Clone, Debug, Default, CandidType, Deserialize)]
