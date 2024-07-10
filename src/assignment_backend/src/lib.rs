@@ -1,7 +1,7 @@
-use candid::types::principal;
 use candid::{CandidType, Deserialize, Principal};
-use ic_cdk::{api::call::ManualReply, query, update};
-use std::borrow::Borrow;
+use ic_cdk::api::time;
+use ic_cdk::{query, update};
+// use std::borrow::Borrow;
 // use serde::de::value::Error;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -13,6 +13,7 @@ type CompanyProfileStore = BTreeMap<Principal, CompanyProfile>;
 
 type JobStore = BTreeMap<u128, Job>;
 type ApplicationStore = BTreeMap<u128, Application>;
+type SkillStore = BTreeMap<u16, Skill>;
 
 thread_local! {
     // static ID_STORE: RefCell<IdStore> = RefCell::default();
@@ -26,18 +27,23 @@ thread_local! {
     static APPLICATION_ID_STORE: Cell<u128> = Cell::new(0);
     static APPLICATION_STORE: RefCell<ApplicationStore> = RefCell::default();
 
+    static SKILL_ID_STORE: Cell<u16> = Cell::new(0);
+    static SKILL_STORE: RefCell<SkillStore> = RefCell::default();
 }
 
 #[query]
 fn get_principal() -> Principal {
+    // get principle is used for testing
     ic_cdk::api::caller()
 }
 
-#[update]
-fn create_applicant_profile(input: ApplicantProfile) -> CreationStatus {
+#[update] // need to implement gauards
+fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) -> CreationStatus {
     let principal_id = ic_cdk::api::caller();
     let mut is_exist = false;
+    let mut applicant_skills = BTreeMap::<u16, Skill>::new();
 
+    // move this to guard statement?
     COMPANY_PROFILE_STORE.with(|profile_store| {
         if !profile_store.borrow().get(&principal_id).is_none() {
             is_exist = true;
@@ -45,28 +51,78 @@ fn create_applicant_profile(input: ApplicantProfile) -> CreationStatus {
         };
     });
 
+    // move this to guard statement?
     if is_exist {
         return CreationStatus::Fail;
     };
 
+    // not handling validations of skills,
+    // verify by id is easy, but to verify to string via on chain would require a bit of work with some limits imposed.
+    // because it could be an attacked vector if no limits.
+    // could use a different skill type for input and for storing, so don't need to store id as an option
+    SKILL_STORE.with(|skill_store| {
+        for skill in skills.iter() {
+            SKILL_ID_STORE.with(|id_store| {
+                if id_store.get() != u16::MAX {
+                    return;
+                }
+
+                if !skill.id.is_none() {
+                    applicant_skills.insert(skill.id.unwrap(), skill.clone());
+                    return;
+                }
+
+                let id = id_store.get();
+                skill_store.borrow_mut().insert(
+                    id.to_owned(),
+                    Skill {
+                        id: Some(id.to_owned()),
+                        name: skill.name.clone(),
+                    },
+                );
+
+                applicant_skills.insert(
+                    id.to_owned(),
+                    Skill {
+                        id: Some(id.to_owned()),
+                        name: skill.name.clone(),
+                    },
+                );
+
+                id_store.set(id + 1);
+            });
+        }
+    });
+
     APPLICANT_PROFILE_STORE.with(|profile_store| {
+        // should move this validation in gaurd statement
         if !profile_store.borrow().get(&principal_id).is_none() {
             is_exist = true;
             return;
         };
 
-        let profile = ApplicantProfile {
-            id: Some(principal_id),
-            ..input
-        };
+        profile_store.borrow_mut().insert(
+            principal_id,
+            ApplicantProfile {
+                id: Some(principal_id),
+                first_name: params.first_name,
+                last_name: params.last_name,
+                nickname: params.nickname,
+                bio: params.bio,
 
-        profile_store.borrow_mut().insert(principal_id, profile);
+                // blocktime() -> is this a thing? will come back to this later
+                created_at: time(),
+                skills: applicant_skills,
+            },
+        );
     });
 
+    // move this to guard statement?
     if is_exist {
         return CreationStatus::Fail;
     };
 
+    // should just return error or nothing instead of a success status?
     return CreationStatus::Success;
 }
 
@@ -195,6 +251,22 @@ fn apply_to_job(input: Application) -> CreationStatus {
     return CreationStatus::Success;
 }
 
+// #[update]
+// fn withdraw_application() {
+//     let principal_id = ic_cdk::api::caller();
+//     APPLICATION_STORE.with(|application_store| {
+//         let id = 0;
+
+//         application_store.borrow_mut().insert(id, value);
+//         let data = application_store.borrow_mut();
+//         let application = data.get(&id);
+//         if !application.is_none() {
+//             let data = application.unwrap();
+//             data.status = ApplicationStatus::Withdraw;
+//         }
+//     });
+// }
+
 #[query]
 fn get_company(id: Principal) -> Option<CompanyProfile> {
     COMPANY_PROFILE_STORE.with(|profile_store| {
@@ -227,19 +299,30 @@ struct CompanyProfile {
 
 #[derive(Clone, Debug, Default, CandidType, Deserialize)]
 struct ApplicantProfile {
+    // probably don't need to store principal as an option
     id: Option<Principal>,
     first_name: String,
     last_name: String,
     nickname: String,
     bio: String,
     created_at: u64,
-    // skills: Vec<Skill>,
-    skills: Skill,
+    skills: BTreeMap<u16, Skill>,
+}
+
+#[derive(Clone, Debug, Default, CandidType, Deserialize)]
+struct ApplicantParams {
+    first_name: String,
+    last_name: String,
+    nickname: String,
+    bio: String,
+    // need a way to handle skills,
+    // create new skills if not exist
+    // use existing skills if they do exist
 }
 
 #[derive(Clone, Debug, Default, CandidType, Deserialize)]
 struct Skill {
-    id: u32,
+    id: Option<u16>,
     name: String,
 }
 
@@ -321,3 +404,13 @@ impl Default for ApplicationStatus {
 }
 
 ic_cdk::export_candid!();
+
+// MAIN TASK
+//  create a job
+//  cancel the job
+//  apply ot the job
+//  withdraw application
+//  aceptjob
+
+// user profile
+// register user
