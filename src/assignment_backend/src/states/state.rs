@@ -83,14 +83,14 @@ pub struct ApplicationParams {
     pub salary_to: u128,
 }
 
-#[derive(Clone, Debug, CandidType, Deserialize)]
+#[derive(Clone, Debug, CandidType, Deserialize, PartialEq)]
 pub enum JobStatus {
     Open,
     Canceled,
     Closed,
 }
 
-#[derive(Clone, Debug, CandidType, Deserialize)]
+#[derive(Clone, Debug, CandidType, Deserialize, PartialEq)]
 pub enum ApplicationStatus {
     Applied,
     Withdraw,

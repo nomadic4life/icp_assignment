@@ -8,8 +8,6 @@ use std::ops::Bound::Included;
 pub mod states;
 pub use states::*;
 
-// type IdStore = BTreeMap<String, Principal>;
-// type ProfileTypeStore = BTreeMap<Principal, UserType>;
 type ApplicantProfileStore = BTreeMap<Principal, ApplicantProfile>;
 type CompanyProfileStore = BTreeMap<Principal, CompanyProfile>;
 
@@ -18,8 +16,7 @@ type ApplicationStore = BTreeMap<u128, Application>;
 type SkillStore = BTreeMap<u16, Skill>;
 
 thread_local! {
-    // static ID_STORE: RefCell<IdStore> = RefCell::default();
-    // static PROFILE_TYPE_STORE: RefCell<ProfileTypeStore> = RefCell::default();
+
     static APPLICANT_PROFILE_STORE: RefCell<ApplicantProfileStore> = RefCell::default();
     static COMPANY_PROFILE_STORE: RefCell<CompanyProfileStore> = RefCell::default();
 
@@ -245,11 +242,107 @@ fn apply_to_job(params: ApplicationParams) {
     });
 }
 
-// make offer to existing application
-// make offer directly to applicant
-// decline application to job
-// accept offer
-// reject offer
+#[update]
+fn make_offer(appliation_id: u128, job_id: u128, accept: bool) {
+    let principal_id = ic_cdk::api::caller();
+    let mut is_valid = false;
+
+    JOB_STORE.with(|store| {
+        if principal_id != store.borrow().get(&job_id).unwrap().company_id.unwrap() {
+            // unauthorized company id
+            return;
+        }
+
+        if job_id != store.borrow().get(&job_id).unwrap().id {
+            // invalid job id
+            return;
+        }
+
+        is_valid = true;
+    });
+
+    if !is_valid {
+        return;
+    }
+
+    APPLICATION_STORE.with(|store| {
+        if appliation_id <= store.borrow().len() as u128 {
+            // invalid appliction id
+            return;
+        }
+
+        let data = store.borrow();
+        let data = data.get(&appliation_id).unwrap();
+        if !(data.status == ApplicationStatus::Applied) {
+            // invalid application status
+            return;
+        }
+
+        if accept {
+            store.borrow_mut().insert(
+                appliation_id,
+                Application {
+                    status: ApplicationStatus::Offer,
+                    ..data.to_owned()
+                },
+            );
+        } else {
+            store.borrow_mut().insert(
+                appliation_id,
+                Application {
+                    status: ApplicationStatus::Rejected,
+                    ..data.to_owned()
+                },
+            );
+        }
+    })
+}
+
+// #[update]
+// fn make_offer_directly(applicant_id: Principal, job_id: u128) {}
+
+#[update]
+fn accpet_offer(id: u128, accept: bool) {
+    let principal_id = ic_cdk::api::caller();
+
+    APPLICATION_STORE.with(|store| {
+        if id <= store.borrow().len() as u128 {
+            // invalid appliction id
+            return;
+        }
+
+        let data = store.borrow();
+        let data = data.get(&id).unwrap();
+
+        if principal_id != data.applicant_id.unwrap() {
+            // invalid applicant
+            return;
+        }
+
+        if !(data.status == ApplicationStatus::Offer) {
+            // invalid application status
+            return;
+        }
+
+        if accept {
+            store.borrow_mut().insert(
+                id,
+                Application {
+                    status: ApplicationStatus::Accepted,
+                    ..data.to_owned()
+                },
+            );
+        } else {
+            store.borrow_mut().insert(
+                id,
+                Application {
+                    status: ApplicationStatus::Rejected,
+                    ..data.to_owned()
+                },
+            );
+        }
+    })
+}
 
 #[update]
 fn cancel_job(id: u128) {
@@ -419,8 +512,8 @@ ic_cdk::export_candid!();
 //  cancel the job -> completed
 //  apply to the job -> completed
 //  withdraw application -> completed
-//  make offer -> exsting application | create application by company for applicant?
-//  aceptjob
+//  make offer -> exsting application -> completed | create application by company for applicant?
+//  aceptjob -> completed
 
 //  :: paginated list ::
 //  get list of jobs applied by user
@@ -492,3 +585,5 @@ ic_cdk::export_candid!();
 //  get applications
 
 // make test cases
+// might change from u128 to u64 or u32 to save space
+// pre hook | post hook | use stable storage
