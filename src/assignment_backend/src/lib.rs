@@ -38,7 +38,7 @@ fn get_principal() -> Principal {
     ic_cdk::api::caller()
 }
 
-fn guard_create_applicant_profile() -> Result<(), String> {
+fn guard_create_user() -> Result<(), String> {
     let principal_id = ic_cdk::api::caller();
 
     let mut is_exist = false;
@@ -66,7 +66,7 @@ fn guard_create_applicant_profile() -> Result<(), String> {
     Ok(())
 }
 
-#[update(guard = "guard_create_applicant_profile")]
+#[update(guard = "guard_create_user")]
 fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) {
     let principal_id = ic_cdk::api::caller();
     let mut applicant_skills = BTreeMap::<u16, Skill>::new();
@@ -128,52 +128,25 @@ fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) {
     });
 }
 
-#[update] // need to implement gauards
-fn create_company_profile(params: CompanyParams) -> CreationStatus {
+#[update(guard = "guard_create_user")]
+fn create_company_profile(params: CompanyParams) {
     let principal_id = ic_cdk::api::caller();
-    let mut is_exist = false;
-
-    // move this to guard statement?
-    COMPANY_PROFILE_STORE.with(|profile_store| {
-        if !profile_store.borrow().get(&principal_id).is_none() {
-            is_exist = true;
-            return;
-        };
-    });
-
-    // move this to guard statement?
-    if is_exist {
-        return CreationStatus::Fail;
-    };
 
     COMPANY_PROFILE_STORE.with(|profile_store| {
-        // move this to guard statement?
-        if !profile_store.borrow().get(&principal_id).is_none() {
-            is_exist = true;
-            return;
-        };
+        profile_store.borrow_mut().insert(
+            principal_id,
+            CompanyProfile {
+                id: Some(principal_id),
+                name: params.name,
+                logo: params.logo,
+                twitter: params.twitter,
+                website: params.website,
 
-        let profile = CompanyProfile {
-            id: Some(principal_id),
-            name: params.name,
-            logo: params.logo,
-            twitter: params.twitter,
-            website: params.website,
-
-            // blocktime() -> is this a thing? will come back to this later
-            created_at: time(),
-        };
-
-        profile_store.borrow_mut().insert(principal_id, profile);
+                // blocktime() -> is this a thing? will come back to this later
+                created_at: time(),
+            },
+        );
     });
-
-    // move this to guard statement?
-    if is_exist {
-        return CreationStatus::Fail;
-    };
-
-    // should just return error or nothing instead of a success status?
-    return CreationStatus::Success;
 }
 
 #[update]
