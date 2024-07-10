@@ -1,11 +1,12 @@
-use candid::{CandidType, Deserialize, Principal};
-use ic_cdk::api::call::arg_data;
+use candid::Principal;
 use ic_cdk::api::time;
 use ic_cdk::{query, update};
-// use std::borrow::Borrow;
-// use serde::de::value::Error;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
+use std::ops::Bound::Included;
+
+pub mod states;
+pub use states::*;
 
 // type IdStore = BTreeMap<String, Principal>;
 // type ProfileTypeStore = BTreeMap<Principal, UserType>;
@@ -30,6 +31,68 @@ thread_local! {
 
     static SKILL_ID_STORE: Cell<u16> = Cell::new(0);
     static SKILL_STORE: RefCell<SkillStore> = RefCell::default();
+}
+
+fn is_valid_create_user() -> Result<(), String> {
+    let principal_id = ic_cdk::api::caller();
+
+    let mut is_exist = false;
+    COMPANY_PROFILE_STORE.with(|profile_store| {
+        if !profile_store.borrow().get(&principal_id).is_none() {
+            is_exist = true;
+        };
+    });
+
+    if is_exist {
+        return Err(String::from("User already exist as Company"));
+    };
+
+    let mut is_exist = false;
+    APPLICANT_PROFILE_STORE.with(|profile_store| {
+        if !profile_store.borrow().get(&principal_id).is_none() {
+            is_exist = true;
+        };
+    });
+
+    if is_exist {
+        return Err(String::from("User already exist as Applicant"));
+    };
+
+    Ok(())
+}
+
+fn is_valid_applicant() -> Result<(), String> {
+    let principal_id = ic_cdk::api::caller();
+
+    let mut is_exist = false;
+    APPLICANT_PROFILE_STORE.with(|profile_store| {
+        if !profile_store.borrow().get(&principal_id).is_none() {
+            is_exist = true;
+        };
+    });
+
+    if is_exist {
+        return Err(String::from("User already exist as Applicant"));
+    };
+
+    Ok(())
+}
+
+fn is_valid_company() -> Result<(), String> {
+    let principal_id = ic_cdk::api::caller();
+
+    let mut is_exist = false;
+    COMPANY_PROFILE_STORE.with(|profile_store| {
+        if !profile_store.borrow().get(&principal_id).is_none() {
+            is_exist = true;
+        };
+    });
+
+    if !is_exist {
+        return Err(String::from("Invalid User"));
+    };
+
+    Ok(())
 }
 
 fn update_skill(skills: Vec<Skill>) -> BTreeMap<u16, Skill> {
@@ -77,40 +140,6 @@ fn update_skill(skills: Vec<Skill>) -> BTreeMap<u16, Skill> {
     return updated_skills;
 }
 
-#[query]
-fn get_principal() -> Principal {
-    // get principle is used for testing
-    ic_cdk::api::caller()
-}
-
-fn is_valid_create_user() -> Result<(), String> {
-    let principal_id = ic_cdk::api::caller();
-
-    let mut is_exist = false;
-    COMPANY_PROFILE_STORE.with(|profile_store| {
-        if !profile_store.borrow().get(&principal_id).is_none() {
-            is_exist = true;
-        };
-    });
-
-    if is_exist {
-        return Err(String::from("User already exist as Company"));
-    };
-
-    let mut is_exist = false;
-    APPLICANT_PROFILE_STORE.with(|profile_store| {
-        if !profile_store.borrow().get(&principal_id).is_none() {
-            is_exist = true;
-        };
-    });
-
-    if is_exist {
-        return Err(String::from("User already exist as Applicant"));
-    };
-
-    Ok(())
-}
-
 #[update(guard = "is_valid_create_user")]
 fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) {
     let principal_id = ic_cdk::api::caller();
@@ -154,23 +183,6 @@ fn create_company_profile(params: CompanyParams) {
     });
 }
 
-fn is_valid_company() -> Result<(), String> {
-    let principal_id = ic_cdk::api::caller();
-
-    let mut is_exist = false;
-    COMPANY_PROFILE_STORE.with(|profile_store| {
-        if !profile_store.borrow().get(&principal_id).is_none() {
-            is_exist = true;
-        };
-    });
-
-    if !is_exist {
-        return Err(String::from("Invalid User"));
-    };
-
-    Ok(())
-}
-
 #[update(guard = "is_valid_company")]
 fn create_job(params: JobParams, skills: Vec<Skill>) {
     let principal_id = ic_cdk::api::caller();
@@ -193,53 +205,6 @@ fn create_job(params: JobParams, skills: Vec<Skill>) {
             );
         });
     });
-}
-
-#[update]
-fn cancel_job(id: u128) {
-    let principal_id = ic_cdk::api::caller();
-
-    JOB_STORE.with(|job_store| {
-        let job = job_store.borrow();
-        let job = job.get(&id);
-
-        if job.is_none() {
-            // job doesn't exist
-            return;
-        }
-
-        let job = job.unwrap().to_owned();
-
-        if job.company_id.unwrap() != principal_id {
-            // invalid authority
-            return;
-        }
-
-        job_store.borrow_mut().insert(
-            id,
-            Job {
-                status: JobStatus::Canceled,
-                ..job
-            },
-        );
-    });
-}
-
-fn is_valid_applicant() -> Result<(), String> {
-    let principal_id = ic_cdk::api::caller();
-
-    let mut is_exist = false;
-    APPLICANT_PROFILE_STORE.with(|profile_store| {
-        if !profile_store.borrow().get(&principal_id).is_none() {
-            is_exist = true;
-        };
-    });
-
-    if is_exist {
-        return Err(String::from("User already exist as Applicant"));
-    };
-
-    Ok(())
 }
 
 #[update(guard = "is_valid_applicant")]
@@ -280,6 +245,42 @@ fn apply_to_job(params: ApplicationParams) {
     });
 }
 
+// make offer to existing application
+// make offer directly to applicant
+// decline application to job
+// accept offer
+// reject offer
+
+#[update]
+fn cancel_job(id: u128) {
+    let principal_id = ic_cdk::api::caller();
+
+    JOB_STORE.with(|job_store| {
+        let job = job_store.borrow();
+        let job = job.get(&id);
+
+        if job.is_none() {
+            // job doesn't exist
+            return;
+        }
+
+        let job = job.unwrap().to_owned();
+
+        if job.company_id.unwrap() != principal_id {
+            // invalid authority
+            return;
+        }
+
+        job_store.borrow_mut().insert(
+            id,
+            Job {
+                status: JobStatus::Canceled,
+                ..job
+            },
+        );
+    });
+}
+
 #[update]
 fn withdraw_application(id: u128) {
     let principal_id = ic_cdk::api::caller();
@@ -310,7 +311,14 @@ fn withdraw_application(id: u128) {
 }
 
 #[query]
+fn get_principal() -> Principal {
+    // get principle is used for testing
+    ic_cdk::api::caller()
+}
+
+#[query]
 fn get_company(id: Principal) -> Option<CompanyProfile> {
+    // should repackage the data?
     COMPANY_PROFILE_STORE.with(|profile_store| {
         profile_store
             .borrow()
@@ -321,6 +329,7 @@ fn get_company(id: Principal) -> Option<CompanyProfile> {
 
 #[query]
 fn get_applicant(id: Principal) -> Option<ApplicantProfile> {
+    // should repackage the data?
     APPLICANT_PROFILE_STORE.with(|profile_store| {
         profile_store
             .borrow()
@@ -329,111 +338,77 @@ fn get_applicant(id: Principal) -> Option<ApplicantProfile> {
     })
 }
 
-#[derive(Clone, Debug, Default, CandidType, Deserialize)]
-struct CompanyProfile {
-    id: Option<Principal>,
-    name: String,
-    logo: String,
-    twitter: String,
-    website: String,
-    created_at: u64,
+#[query]
+fn get_job(id: u128) -> Option<Job> {
+    // should repackage the data?
+    JOB_STORE.with(|store| store.borrow().get(&id).map(|data| data.to_owned()))
 }
 
-#[derive(Clone, Debug, Default, CandidType, Deserialize)]
-struct CompanyParams {
-    name: String,
-    logo: String,
-    twitter: String,
-    website: String,
+#[query]
+fn get_application(id: u128) -> Option<Application> {
+    // should repackage the data?
+    APPLICATION_STORE.with(|store| store.borrow().get(&id).map(|data| data.to_owned()))
 }
 
-#[derive(Clone, Debug, Default, CandidType, Deserialize)]
-struct ApplicantProfile {
-    id: Option<Principal>,
-    first_name: String,
-    last_name: String,
-    nickname: String,
-    bio: String,
-    created_at: u64,
-    skills: BTreeMap<u16, Skill>,
-}
+#[query]
+fn get_job_list(offset: u128) -> Option<Vec<Job>> {
+    let mut data = Vec::<Job>::new();
 
-#[derive(Clone, Debug, Default, CandidType, Deserialize)]
-struct ApplicantParams {
-    first_name: String,
-    last_name: String,
-    nickname: String,
-    bio: String,
-}
+    JOB_STORE.with(|store| {
+        let len = store.borrow().len() as u128;
+        let limit = 50;
 
-#[derive(Clone, Debug, Default, CandidType, Deserialize)]
-struct Skill {
-    id: Option<u16>,
-    name: String,
-}
+        if len == 0 || offset >= len {
+            return;
+        }
 
-#[derive(Clone, Default, CandidType, Deserialize)]
-struct Job {
-    id: u128,
-    company_id: Option<Principal>,
-    position: String,
-    description: String,
-    bounty: u128,
-    status: JobStatus,
-    required_skills: BTreeMap<u16, Skill>,
-}
+        let start = offset;
+        let end = if offset + limit > len {
+            len - offset - 1
+        } else {
+            offset + limit
+        };
 
-#[derive(Clone, Debug, Default, CandidType, Deserialize)]
-struct JobParams {
-    position: String,
-    description: String,
-    bounty: u128,
-}
+        for (_, &ref value) in store.borrow().range((Included(&start), Included(&end))) {
+            data.push(value.to_owned());
+        }
+    });
 
-#[derive(Clone, Debug, Default, CandidType, Deserialize)]
-struct Application {
-    id: u128,
-    applicant_id: Option<Principal>,
-    job_id: u128,
-    contact_email: String,
-    status: ApplicationStatus,
-    salary_from: u128,
-    salary_to: u128,
-}
-
-#[derive(Clone, Debug, Default, CandidType, Deserialize)]
-struct ApplicationParams {
-    job_id: u128,
-    contact_email: String,
-    salary_from: u128,
-    salary_to: u128,
-}
-
-#[derive(Clone, Debug, CandidType, Deserialize)]
-enum JobStatus {
-    Open,
-    Canceled,
-    Closed,
-}
-
-#[derive(Clone, Debug, CandidType, Deserialize)]
-enum ApplicationStatus {
-    Applied,
-    Withdraw,
-    Offer,
-    Accepted,
-    Rejected,
-}
-
-impl Default for JobStatus {
-    fn default() -> Self {
-        Self::Open
+    if data.len() == 0 {
+        None
+    } else {
+        Some(data)
     }
 }
 
-impl Default for ApplicationStatus {
-    fn default() -> Self {
-        Self::Applied
+#[query]
+fn get_application_list(offset: u128) -> Option<Vec<Application>> {
+    let mut data = Vec::<Application>::new();
+
+    APPLICATION_STORE.with(|store| {
+        let len = store.borrow().len() as u128;
+        let limit = 50;
+
+        if len == 0 || offset >= len {
+            return;
+        }
+
+        let start = offset;
+        let end = if offset + limit > len {
+            len - offset - 1
+        } else {
+            offset + limit
+        };
+
+        for (_, &ref value) in store.borrow().range((Included(&start), Included(&end))) {
+            data.push(value.to_owned());
+        }
+    });
+
+    if data.len() == 0 {
+        None
+    } else {
+        Some(data)
     }
 }
 
@@ -442,9 +417,78 @@ ic_cdk::export_candid!();
 // MAIN TASK
 //  create a job -> completed
 //  cancel the job -> completed
-//  apply to the job
-//  withdraw application
+//  apply to the job -> completed
+//  withdraw application -> completed
+//  make offer -> exsting application | create application by company for applicant?
 //  aceptjob
+
+//  :: paginated list ::
+//  get list of jobs applied by user
+//  get list of jobs created by company
+//  get list of applicants
+//  get list of companies
+//  get list of jobs -> completed
+//  get list of applications -> completed
+//  get list of skills
+
+//  :: search :: unoptimized search
+//  find skill
+
+//  :: filter :: unoptimized filter
+//  list of jobs by skill
+//  list of applicants by skill
 
 // user profile
 // register user
+
+// udpates
+//  job -> company authority
+//  application -> applicant authority
+//  applicant -> applicant authority
+//  company -> applicant authority
+
+// consideration
+//  delete skill if no reference to skill -> could use a reference counter
+//  delete job if no reference to job -> could use a reference counter
+//  delete application if no reference to application -> could use a reference counter
+//  delete applicant if no reference to applicant -> could use a reference counter
+//  delete company if no reference to company -> could use a reference counter
+
+// need to add sanitization  best to handle on chain, can't trust source
+// skills
+// first name
+// last name
+// bio
+// company name
+// logo
+// twitter
+// website
+// position
+// description
+// contact email
+
+// validations best to handle on chain, can't trust source
+// email
+// url [twitter, website, logo]
+// salary_from < salary_to
+
+// additional search functionality
+//  job by position
+//  job by bounty
+//  applicant by location
+//  application by status
+//  job by status
+
+// optimized data structures, for sorting, searching, and reference relationship
+// better folder structure
+// simple frontend handling core functionality
+//  create a job
+//  cancel the job
+//  apply to the job
+//  withdraw application
+//  make offer -> exsting application | create application by company for applicant?
+//  aceptjob
+//  get jobs
+//  get applications
+
+// make test cases
