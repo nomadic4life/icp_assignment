@@ -1,4 +1,5 @@
 use candid::{CandidType, Deserialize, Principal};
+use ic_cdk::api::call::arg_data;
 use ic_cdk::api::time;
 use ic_cdk::{query, update};
 // use std::borrow::Borrow;
@@ -37,24 +38,38 @@ fn get_principal() -> Principal {
     ic_cdk::api::caller()
 }
 
-#[update] // need to implement gauards
-fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) -> CreationStatus {
+fn guard_create_applicant_profile() -> Result<(), String> {
     let principal_id = ic_cdk::api::caller();
-    let mut is_exist = false;
-    let mut applicant_skills = BTreeMap::<u16, Skill>::new();
 
-    // move this to guard statement?
+    let mut is_exist = false;
     COMPANY_PROFILE_STORE.with(|profile_store| {
         if !profile_store.borrow().get(&principal_id).is_none() {
             is_exist = true;
-            return;
         };
     });
 
-    // move this to guard statement?
     if is_exist {
-        return CreationStatus::Fail;
+        return Err(String::from("User already exist as Company"));
     };
+
+    let mut is_exist = false;
+    APPLICANT_PROFILE_STORE.with(|profile_store| {
+        if !profile_store.borrow().get(&principal_id).is_none() {
+            is_exist = true;
+        };
+    });
+
+    if is_exist {
+        return Err(String::from("User already exist as Applicant"));
+    };
+
+    Ok(())
+}
+
+#[update(guard = "guard_create_applicant_profile")]
+fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) {
+    let principal_id = ic_cdk::api::caller();
+    let mut applicant_skills = BTreeMap::<u16, Skill>::new();
 
     // not handling validations of skills,
     // verify by id is easy, but to verify to string via on chain would require a bit of work with some limits imposed.
@@ -63,12 +78,13 @@ fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) -> Crea
     SKILL_STORE.with(|skill_store| {
         for skill in skills.iter() {
             SKILL_ID_STORE.with(|id_store| {
-                if id_store.get() != u16::MAX {
+                if !skill.id.is_none() {
+                    applicant_skills.insert(skill.id.unwrap(), skill.clone());
                     return;
                 }
 
-                if !skill.id.is_none() {
-                    applicant_skills.insert(skill.id.unwrap(), skill.clone());
+                // fail safe to not overwrite existing skills if overflow
+                if id_store.get() != u16::MAX {
                     return;
                 }
 
@@ -95,12 +111,6 @@ fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) -> Crea
     });
 
     APPLICANT_PROFILE_STORE.with(|profile_store| {
-        // should move this validation in gaurd statement
-        if !profile_store.borrow().get(&principal_id).is_none() {
-            is_exist = true;
-            return;
-        };
-
         profile_store.borrow_mut().insert(
             principal_id,
             ApplicantProfile {
@@ -116,33 +126,28 @@ fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) -> Crea
             },
         );
     });
-
-    // move this to guard statement?
-    if is_exist {
-        return CreationStatus::Fail;
-    };
-
-    // should just return error or nothing instead of a success status?
-    return CreationStatus::Success;
 }
 
-#[update]
-fn create_company_profile(input: CompanyProfile) -> CreationStatus {
+#[update] // need to implement gauards
+fn create_company_profile(params: CompanyParams) -> CreationStatus {
     let principal_id = ic_cdk::api::caller();
     let mut is_exist = false;
 
-    APPLICANT_PROFILE_STORE.with(|profile_store| {
+    // move this to guard statement?
+    COMPANY_PROFILE_STORE.with(|profile_store| {
         if !profile_store.borrow().get(&principal_id).is_none() {
             is_exist = true;
             return;
         };
     });
 
+    // move this to guard statement?
     if is_exist {
         return CreationStatus::Fail;
     };
 
     COMPANY_PROFILE_STORE.with(|profile_store| {
+        // move this to guard statement?
         if !profile_store.borrow().get(&principal_id).is_none() {
             is_exist = true;
             return;
@@ -150,15 +155,24 @@ fn create_company_profile(input: CompanyProfile) -> CreationStatus {
 
         let profile = CompanyProfile {
             id: Some(principal_id),
-            ..input
+            name: params.name,
+            logo: params.logo,
+            twitter: params.twitter,
+            website: params.website,
+
+            // blocktime() -> is this a thing? will come back to this later
+            created_at: time(),
         };
 
         profile_store.borrow_mut().insert(principal_id, profile);
     });
 
+    // move this to guard statement?
     if is_exist {
         return CreationStatus::Fail;
     };
+
+    // should just return error or nothing instead of a success status?
     return CreationStatus::Success;
 }
 
@@ -298,8 +312,15 @@ struct CompanyProfile {
 }
 
 #[derive(Clone, Debug, Default, CandidType, Deserialize)]
+struct CompanyParams {
+    name: String,
+    logo: String,
+    twitter: String,
+    website: String,
+}
+
+#[derive(Clone, Debug, Default, CandidType, Deserialize)]
 struct ApplicantProfile {
-    // probably don't need to store principal as an option
     id: Option<Principal>,
     first_name: String,
     last_name: String,
@@ -315,9 +336,6 @@ struct ApplicantParams {
     last_name: String,
     nickname: String,
     bio: String,
-    // need a way to handle skills,
-    // create new skills if not exist
-    // use existing skills if they do exist
 }
 
 #[derive(Clone, Debug, Default, CandidType, Deserialize)]
