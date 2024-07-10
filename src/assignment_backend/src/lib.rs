@@ -172,24 +172,25 @@ fn is_valid_company() -> Result<(), String> {
 }
 
 #[update(guard = "is_valid_company")]
-fn create_job(params: CreateJob, skills: Vec<Skill>) {
+fn create_job(params: JobParams, skills: Vec<Skill>) {
     let principal_id = ic_cdk::api::caller();
 
     JOB_ID_STORE.with(|id| {
         JOB_STORE.with(|job_store| {
-            let job = Job {
-                id: id.get(),
-                company_id: Some(principal_id),
-                position: params.position,
-                description: params.description,
-                bounty: params.bounty,
-                status: JobStatus::Open,
-                required_skills: update_skill(skills),
-            };
-
             id.set(id.get() + 1);
 
-            job_store.borrow_mut().insert(id.get(), job);
+            job_store.borrow_mut().insert(
+                id.get(),
+                Job {
+                    id: id.get(),
+                    company_id: Some(principal_id),
+                    position: params.position,
+                    description: params.description,
+                    bounty: params.bounty,
+                    status: JobStatus::Open,
+                    required_skills: update_skill(skills),
+                },
+            );
         });
     });
 }
@@ -224,27 +225,31 @@ fn cancel_job(id: u128) {
     });
 }
 
-#[update]
-fn apply_to_job(input: Application) -> CreationStatus {
+fn is_valid_applicant() -> Result<(), String> {
     let principal_id = ic_cdk::api::caller();
-    // should use flag
-    let mut is_exist_applicant = false;
-    let mut is_exist_job_ = false;
 
+    let mut is_exist = false;
     APPLICANT_PROFILE_STORE.with(|profile_store| {
-        if profile_store.borrow().get(&principal_id).is_none() {
-            return;
+        if !profile_store.borrow().get(&principal_id).is_none() {
+            is_exist = true;
         };
-
-        is_exist_applicant = true;
     });
 
-    if !is_exist_applicant {
-        return CreationStatus::Fail;
-    }
+    if is_exist {
+        return Err(String::from("User already exist as Applicant"));
+    };
 
+    Ok(())
+}
+
+#[update(guard = "is_valid_applicant")]
+fn apply_to_job(params: ApplicationParams) {
+    let principal_id = ic_cdk::api::caller();
+
+    // VALIDATIONS
+    let mut is_exist_job_ = false;
     JOB_STORE.with(|job_store| {
-        if job_store.borrow().get(&input.job_id).is_none() {
+        if job_store.borrow().get(&params.job_id).is_none() {
             return;
         }
 
@@ -252,45 +257,57 @@ fn apply_to_job(input: Application) -> CreationStatus {
     });
 
     if !is_exist_job_ {
-        return CreationStatus::Fail;
+        return;
     }
 
     APPLICATION_ID_STORE.with(|id| {
         APPLICATION_STORE.with(|application_store| {
-            let application = Application {
-                id: id.get(),
-                applicant_id: Some(principal_id),
-                job_id: input.job_id,
-                status: ApplicationStatus::Applied,
-                contact_email: input.contact_email,
-                salary_from: input.salary_from,
-                salary_to: input.salary_to,
-            };
-
             id.set(id.get() + 1);
 
-            application_store.borrow_mut().insert(id.get(), application);
+            application_store.borrow_mut().insert(
+                id.get(),
+                Application {
+                    id: id.get(),
+                    applicant_id: Some(principal_id),
+                    job_id: params.job_id,
+                    status: ApplicationStatus::Applied,
+                    contact_email: params.contact_email,
+                    salary_from: params.salary_from,
+                    salary_to: params.salary_to,
+                },
+            );
         });
     });
-
-    return CreationStatus::Success;
 }
 
-// #[update]
-// fn withdraw_application() {
-//     let principal_id = ic_cdk::api::caller();
-//     APPLICATION_STORE.with(|application_store| {
-//         let id = 0;
+#[update]
+fn withdraw_application(id: u128) {
+    let principal_id = ic_cdk::api::caller();
+    APPLICATION_STORE.with(|application_store| {
+        let application = application_store.borrow();
+        let application = application.get(&id);
 
-//         application_store.borrow_mut().insert(id, value);
-//         let data = application_store.borrow_mut();
-//         let application = data.get(&id);
-//         if !application.is_none() {
-//             let data = application.unwrap();
-//             data.status = ApplicationStatus::Withdraw;
-//         }
-//     });
-// }
+        if application.is_none() {
+            // application doesn't exist
+            return;
+        }
+
+        let application = application.unwrap().to_owned();
+
+        if application.applicant_id.unwrap() != principal_id {
+            // invalid authority
+            return;
+        }
+
+        application_store.borrow_mut().insert(
+            id,
+            Application {
+                status: ApplicationStatus::Withdraw,
+                ..application
+            },
+        );
+    });
+}
 
 #[query]
 fn get_company(id: Principal) -> Option<CompanyProfile> {
@@ -367,19 +384,10 @@ struct Job {
 }
 
 #[derive(Clone, Debug, Default, CandidType, Deserialize)]
-struct CreateJob {
+struct JobParams {
     position: String,
     description: String,
     bounty: u128,
-    // required_skills: Vec<Skill>,
-}
-
-#[derive(Clone, Debug, Default, CandidType, Deserialize)]
-struct ApplyToJob {
-    job_id: u128,
-    contact_email: String,
-    salary_from: u128,
-    salary_to: u128,
 }
 
 #[derive(Clone, Debug, Default, CandidType, Deserialize)]
@@ -393,15 +401,12 @@ struct Application {
     salary_to: u128,
 }
 
-enum UserType {
-    Company,
-    Applicant,
-}
-
-#[derive(Clone, CandidType, Deserialize)]
-enum CreationStatus {
-    Success,
-    Fail,
+#[derive(Clone, Debug, Default, CandidType, Deserialize)]
+struct ApplicationParams {
+    job_id: u128,
+    contact_email: String,
+    salary_from: u128,
+    salary_to: u128,
 }
 
 #[derive(Clone, Debug, CandidType, Deserialize)]
@@ -435,9 +440,9 @@ impl Default for ApplicationStatus {
 ic_cdk::export_candid!();
 
 // MAIN TASK
-//  create a job
-//  cancel the job
-//  apply ot the job
+//  create a job -> completed
+//  cancel the job -> completed
+//  apply to the job
 //  withdraw application
 //  aceptjob
 
