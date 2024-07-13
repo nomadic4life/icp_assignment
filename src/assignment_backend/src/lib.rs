@@ -5,14 +5,15 @@ use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::ops::Bound::Included;
 
-pub mod states;
-pub use states::*;
+pub mod state;
+pub use state::*;
 
 type ApplicantProfileStore = BTreeMap<Principal, ApplicantProfile>;
 type CompanyProfileStore = BTreeMap<Principal, CompanyProfile>;
+type JobByCompanyStore = BTreeMap<Principal, Vec<u64>>;
 
-type JobStore = BTreeMap<u128, Job>;
-type ApplicationStore = BTreeMap<u128, Application>;
+type JobStore = BTreeMap<u64, Job>;
+type ApplicationStore = BTreeMap<u64, Application>;
 type SkillStore = BTreeMap<u16, Skill>;
 
 thread_local! {
@@ -20,10 +21,12 @@ thread_local! {
     static APPLICANT_PROFILE_STORE: RefCell<ApplicantProfileStore> = RefCell::default();
     static COMPANY_PROFILE_STORE: RefCell<CompanyProfileStore> = RefCell::default();
 
-    static JOB_ID_STORE: Cell<u128> = Cell::new(0);
+    static JOB_ID_STORE: Cell<u64> = Cell::new(0);
     static JOB_STORE: RefCell<JobStore> = RefCell::default();
 
-    static APPLICATION_ID_STORE: Cell<u128> = Cell::new(0);
+    static JOB_BY_COMPANY_STORE: RefCell<JobByCompanyStore> = RefCell::default();
+
+    static APPLICATION_ID_STORE: Cell<u64> = Cell::new(0);
     static APPLICATION_STORE: RefCell<ApplicationStore> = RefCell::default();
 
     static SKILL_ID_STORE: Cell<u16> = Cell::new(0);
@@ -146,10 +149,10 @@ fn create_applicant_profile(params: ApplicantParams, skills: Vec<Skill>) {
             principal_id,
             ApplicantProfile {
                 id: Some(principal_id),
-                first_name: params.first_name,
-                last_name: params.last_name,
-                nickname: params.nickname,
-                bio: params.bio,
+                first_name: params.first_name.to_lowercase(),
+                last_name: params.last_name.to_lowercase(),
+                nickname: params.nickname.to_lowercase(),
+                bio: params.bio.to_lowercase(),
 
                 // blocktime() -> is this a thing? will come back to this later
                 created_at: time(),
@@ -168,10 +171,10 @@ fn create_company_profile(params: CompanyParams) {
             principal_id,
             CompanyProfile {
                 id: Some(principal_id),
-                name: params.name,
-                logo: params.logo,
-                twitter: params.twitter,
-                website: params.website,
+                name: params.name.to_lowercase(),
+                logo: params.logo.to_lowercase(),
+                twitter: params.twitter.to_lowercase(),
+                website: params.website.to_lowercase(),
 
                 // blocktime() -> is this a thing? will come back to this later
                 created_at: time(),
@@ -193,8 +196,8 @@ fn create_job(params: JobParams, skills: Vec<Skill>) {
                 Job {
                     id: id.get(),
                     company_id: Some(principal_id),
-                    position: params.position,
-                    description: params.description,
+                    position: params.position.to_lowercase(),
+                    description: params.description.to_lowercase(),
                     bounty: params.bounty,
                     status: JobStatus::Open,
                     required_skills: update_skill(skills),
@@ -233,7 +236,7 @@ fn apply_to_job(params: ApplicationParams) {
                     applicant_id: Some(principal_id),
                     job_id: params.job_id,
                     status: ApplicationStatus::Applied,
-                    contact_email: params.contact_email,
+                    contact_email: params.contact_email.to_lowercase(),
                     salary_from: params.salary_from,
                     salary_to: params.salary_to,
                 },
@@ -243,7 +246,7 @@ fn apply_to_job(params: ApplicationParams) {
 }
 
 #[update]
-fn make_offer(appliation_id: u128, job_id: u128, accept: bool) {
+fn make_offer(appliation_id: u64, job_id: u64, accept: bool) {
     let principal_id = ic_cdk::api::caller();
     let mut is_valid = false;
 
@@ -266,7 +269,7 @@ fn make_offer(appliation_id: u128, job_id: u128, accept: bool) {
     }
 
     APPLICATION_STORE.with(|store| {
-        if appliation_id <= store.borrow().len() as u128 {
+        if appliation_id <= store.borrow().len() as u64 {
             // invalid appliction id
             return;
         }
@@ -299,14 +302,14 @@ fn make_offer(appliation_id: u128, job_id: u128, accept: bool) {
 }
 
 // #[update]
-// fn make_offer_directly(applicant_id: Principal, job_id: u128) {}
+// fn make_offer_directly(applicant_id: Principal, job_id: u64, params: ApplicationParams) {}
 
 #[update]
-fn accpet_offer(id: u128, accept: bool) {
+fn accpet_offer(id: u64, accept: bool) {
     let principal_id = ic_cdk::api::caller();
 
     APPLICATION_STORE.with(|store| {
-        if id <= store.borrow().len() as u128 {
+        if id <= store.borrow().len() as u64 {
             // invalid appliction id
             return;
         }
@@ -345,7 +348,7 @@ fn accpet_offer(id: u128, accept: bool) {
 }
 
 #[update]
-fn cancel_job(id: u128) {
+fn cancel_job(id: u64) {
     let principal_id = ic_cdk::api::caller();
 
     JOB_STORE.with(|job_store| {
@@ -375,7 +378,7 @@ fn cancel_job(id: u128) {
 }
 
 #[update]
-fn withdraw_application(id: u128) {
+fn withdraw_application(id: u64) {
     let principal_id = ic_cdk::api::caller();
     APPLICATION_STORE.with(|application_store| {
         let application = application_store.borrow();
@@ -404,14 +407,7 @@ fn withdraw_application(id: u128) {
 }
 
 #[query]
-fn get_principal() -> Principal {
-    // get principle is used for testing
-    ic_cdk::api::caller()
-}
-
-#[query]
 fn get_company(id: Principal) -> Option<CompanyProfile> {
-    // should repackage the data?
     COMPANY_PROFILE_STORE.with(|profile_store| {
         profile_store
             .borrow()
@@ -421,35 +417,117 @@ fn get_company(id: Principal) -> Option<CompanyProfile> {
 }
 
 #[query]
-fn get_applicant(id: Principal) -> Option<ApplicantProfile> {
-    // should repackage the data?
+fn get_applicant(id: Principal) -> Option<ApplicantProfileResponse> {
     APPLICANT_PROFILE_STORE.with(|profile_store| {
         profile_store
             .borrow()
             .get(&id)
-            .map(|profile| profile.to_owned())
+            .map(|profile| ApplicantProfileResponse {
+                id: profile.id,
+                first_name: profile.first_name.clone(),
+                last_name: profile.last_name.clone(),
+                nickname: profile.nickname.clone(),
+                bio: profile.bio.clone(),
+                created_at: profile.created_at,
+                skills: profile.skills.values().cloned().collect(),
+            })
     })
 }
 
 #[query]
-fn get_job(id: u128) -> Option<Job> {
-    // should repackage the data?
-    JOB_STORE.with(|store| store.borrow().get(&id).map(|data| data.to_owned()))
+fn get_job(id: u64) -> Option<JobResponse> {
+    JOB_STORE.with(|store| {
+        store.borrow().get(&id).map(|data| JobResponse {
+            id: data.id,
+            company_id: data.company_id,
+            position: data.position.clone(),
+            description: data.description.clone(),
+            bounty: data.bounty,
+            status: data.status.clone(),
+            required_skills: data.required_skills.values().cloned().collect(),
+        })
+    })
 }
 
 #[query]
-fn get_application(id: u128) -> Option<Application> {
-    // should repackage the data?
+fn get_application(id: u64) -> Option<Application> {
     APPLICATION_STORE.with(|store| store.borrow().get(&id).map(|data| data.to_owned()))
 }
 
 #[query]
-fn get_job_list(offset: u128) -> Option<Vec<Job>> {
-    let mut data = Vec::<Job>::new();
+fn get_skill_list(offset: u16, limit: u16) -> Option<Vec<Skill>> {
+    let mut data = Vec::<Skill>::new();
+
+    SKILL_STORE.with(|store| {
+        let len = store.borrow().len() as u16;
+
+        if len == 0 || offset >= len {
+            return;
+        }
+
+        let start = offset;
+        let end = if offset + limit > len {
+            len - offset - 1
+        } else {
+            offset + limit
+        };
+
+        for (_, &ref skill) in store.borrow().range((Included(&start), Included(&end))) {
+            data.push(skill.to_owned());
+        }
+    });
+
+    if data.len() == 0 {
+        None
+    } else {
+        Some(data)
+    }
+}
+
+#[query]
+fn get_job_list(offset: u64, limit: u64) -> Option<Vec<JobResponse>> {
+    let mut data = Vec::<JobResponse>::new();
 
     JOB_STORE.with(|store| {
-        let len = store.borrow().len() as u128;
-        let limit = 50;
+        let len = store.borrow().len() as u64;
+
+        if len == 0 || offset >= len {
+            return;
+        }
+
+        let start = offset;
+        let end = if offset + limit > len {
+            len - offset - 1
+        } else {
+            offset + limit
+        };
+
+        for (_, &ref job) in store.borrow().range((Included(&start), Included(&end))) {
+            data.push(JobResponse {
+                id: job.id,
+                company_id: job.company_id,
+                position: job.position.clone(),
+                description: job.description.clone(),
+                bounty: job.bounty,
+                status: job.status.clone(),
+                required_skills: job.required_skills.values().cloned().collect(),
+            });
+        }
+    });
+
+    if data.len() == 0 {
+        None
+    } else {
+        Some(data)
+    }
+}
+
+#[query]
+fn get_application_list(offset: u64, limit: u64) -> Option<Vec<Application>> {
+    let mut data = Vec::<Application>::new();
+
+    APPLICATION_STORE.with(|store| {
+        let len = store.borrow().len() as u64;
 
         if len == 0 || offset >= len {
             return;
@@ -475,12 +553,11 @@ fn get_job_list(offset: u128) -> Option<Vec<Job>> {
 }
 
 #[query]
-fn get_application_list(offset: u128) -> Option<Vec<Application>> {
-    let mut data = Vec::<Application>::new();
+fn get_company_list(offset: u64, limit: u64) -> Option<Vec<CompanyProfile>> {
+    let mut data: Vec<CompanyProfile> = Vec::<CompanyProfile>::new();
 
-    APPLICATION_STORE.with(|store| {
-        let len = store.borrow().len() as u128;
-        let limit = 50;
+    COMPANY_PROFILE_STORE.with(|store| {
+        let len = store.borrow().len() as u64;
 
         if len == 0 || offset >= len {
             return;
@@ -493,7 +570,10 @@ fn get_application_list(offset: u128) -> Option<Vec<Application>> {
             offset + limit
         };
 
-        for (_, &ref value) in store.borrow().range((Included(&start), Included(&end))) {
+        let list = store.borrow();
+        let list = list.iter().skip(start as usize).take(end as usize);
+
+        for (_, value) in list {
             data.push(value.to_owned());
         }
     });
@@ -503,6 +583,131 @@ fn get_application_list(offset: u128) -> Option<Vec<Application>> {
     } else {
         Some(data)
     }
+}
+
+#[query]
+fn get_applicant_list(offset: u64, limit: u64) -> Option<Vec<ApplicantProfileResponse>> {
+    let mut data: Vec<ApplicantProfileResponse> = Vec::<ApplicantProfileResponse>::new();
+
+    APPLICANT_PROFILE_STORE.with(|store| {
+        let len = store.borrow().len() as u64;
+
+        if len == 0 || offset >= len {
+            return;
+        }
+
+        let start = offset;
+        let end = if offset + limit > len {
+            len - offset - 1
+        } else {
+            offset + limit
+        };
+
+        let list = store.borrow();
+        let list = list.iter().skip(start as usize).take(end as usize);
+
+        for (_, profile) in list {
+            data.push(ApplicantProfileResponse {
+                id: profile.id,
+                first_name: profile.first_name.clone(),
+                last_name: profile.last_name.clone(),
+                nickname: profile.nickname.clone(),
+                bio: profile.bio.clone(),
+                created_at: profile.created_at,
+                skills: profile.skills.values().cloned().collect(),
+            });
+        }
+    });
+
+    if data.len() == 0 {
+        None
+    } else {
+        Some(data)
+    }
+}
+
+#[query]
+fn applicant_application_list(offset: u64, limit: u64) -> Option<Vec<Application>> {
+    let principal_id = ic_cdk::api::caller();
+    let mut data = Vec::<Application>::new();
+
+    APPLICATION_STORE.with(|store| {
+        let len = store.borrow().len() as u64;
+
+        if len == 0 || offset >= len {
+            return;
+        }
+
+        let start = offset;
+        for (_, &ref value) in store.borrow().range(start..) {
+            if data.len() == limit as usize {
+                break;
+            }
+
+            if principal_id != value.applicant_id.unwrap() {
+                return;
+            }
+
+            data.push(value.to_owned());
+        }
+    });
+
+    if data.len() == 0 {
+        None
+    } else {
+        Some(data)
+    }
+}
+
+#[query]
+fn company_application_list(offset: u64, limit: u64) -> Option<Vec<Application>> {
+    let principal_id = ic_cdk::api::caller();
+    let mut job_list: Option<Vec<u64>> = None;
+    let mut data = Vec::<Application>::new();
+
+    // I wonder because of the closure issue that this can be a performance issue
+    // if the job list is really long, because would have to move / clone everything.
+    JOB_BY_COMPANY_STORE.with(|store| {
+        let data = store.borrow();
+        let data = data.get(&principal_id);
+
+        if data.is_some() {
+            job_list = Some(data.unwrap().to_owned())
+        }
+    });
+
+    if job_list.is_none() {
+        return None;
+    }
+
+    APPLICATION_STORE.with(|store| {
+        let len = store.borrow().len() as u64;
+
+        if len == 0 || offset >= len {
+            return;
+        }
+
+        let start = offset;
+        for (_, &ref value) in store.borrow().range(start..) {
+            if data.len() == limit as usize {
+                break;
+            }
+
+            if principal_id != value.applicant_id.unwrap() {
+                return;
+            }
+
+            // would be better to use BTreeMap
+            for job_id in job_list.clone().unwrap().as_slice() {
+                if job_id.clone() == value.job_id {
+                    data.push(value.to_owned());
+                    break;
+                }
+            }
+        }
+    });
+
+    Some(data)
 }
 
 ic_cdk::export_candid!();
@@ -516,23 +721,20 @@ ic_cdk::export_candid!();
 //  aceptjob -> completed
 
 //  :: paginated list ::
-//  get list of jobs applied by user
-//  get list of jobs created by company
-//  get list of applicants
-//  get list of companies
+//  get list of applicants -> completed
+//  get list of companies -> completed
 //  get list of jobs -> completed
 //  get list of applications -> completed
-//  get list of skills
+//  get list of skills -> completed
 
 //  :: search :: unoptimized search
-//  find skill
+//  find skill -> do this
 
 //  :: filter :: unoptimized filter
+//  get list of jobs applied by user -> completed
+//  get list of jobs created by company -> completed
 //  list of jobs by skill
 //  list of applicants by skill
-
-// user profile
-// register user
 
 // udpates
 //  job -> company authority
@@ -547,23 +749,23 @@ ic_cdk::export_candid!();
 //  delete applicant if no reference to applicant -> could use a reference counter
 //  delete company if no reference to company -> could use a reference counter
 
-// need to add sanitization  best to handle on chain, can't trust source
-// skills
-// first name
-// last name
-// bio
-// company name
-// logo
-// twitter
-// website
-// position
-// description
-// contact email
+// need to add sanitization  best to handle on chain, can't trust source -> do this, just lowwer case
+// skills -> completed
+// first name -> completed
+// last name -> completed
+// bio -> completed
+// company name -> completed
+// logo -> completed
+// twitter -> completed
+// website -> completed
+// position -> completed
+// description -> completed
+// contact email -> completed
 
 // validations best to handle on chain, can't trust source
 // email
 // url [twitter, website, logo]
-// salary_from < salary_to
+// salary_from < salary_to -> do this
 
 // additional search functionality
 //  job by position
@@ -585,5 +787,5 @@ ic_cdk::export_candid!();
 //  get applications
 
 // make test cases
-// might change from u128 to u64 or u32 to save space
+// might change from u64 to u64 or u32 to save space
 // pre hook | post hook | use stable storage

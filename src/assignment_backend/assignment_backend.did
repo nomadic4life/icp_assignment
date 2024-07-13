@@ -1,16 +1,6 @@
 type Skill = record {
-    id: nat32;
-    name: text;
-};
-
-type ApplicantProfile = record {
-    "id": opt principal;
-    "first_name": text;
-    "last_name": text;
-    "nickname": text;
-    "bio": text;
-    "created_at": nat64;
-    "skills": Skill;
+    "id": opt nat32;
+    "name": text;
 };
 
 type CompanyProfile = record {
@@ -22,11 +12,101 @@ type CompanyProfile = record {
     "created_at": nat64;
 };
 
+type CompanyParams = record {
+    "name": text;
+    "logo": text;
+    "twitter": text;
+    "website": text;
+};
 
+type ApplicantProfileResponse = record {
+    "id": opt principal;
+    "first_name": text;
+    "last_name": text;
+    "nickname": text;
+    "bio": text;
+    "created_at": nat64;
+    "skills": vec Skill;
+};
+
+type ApplicantParams = record {
+    "first_name": text;
+    "last_name": text;
+    "nickname": text;
+    "bio": text;
+};
+
+type JobResponse = record {
+    "id": nat64;
+    "company_id": opt principal;
+    "position": text;
+    "description": text;
+    "bounty": nat64;
+    "status": JobStatus;
+    "required_skills": vec Skill;
+};
+
+type JobParams = record {
+    "position": text;
+    "description": text;
+    "bounty": nat64;
+};
+
+type Application = record {
+    "id": nat64;
+    "applicant_id": opt principal;
+    "job_id": nat64;
+    "contact_email": text;
+    "status": ApplicationStatus;
+    "salary_from": nat64;
+    "salary_to": nat64;
+};
+
+type ApplicationParams = record {
+    "job_id": nat64;
+    "contact_email": text;
+    "salary_from": nat64;
+    "salary_to": nat64;
+};
+
+type JobStatus = variant {
+    Open: null;
+    Closed: null;
+    Canceled: null;
+};
+
+type ApplicationStatus = variant {
+    Applied: null;
+    Withdraw: null;
+    Offer: null;
+    Accepted: null;
+    Rejected: null;
+};
 
 service : {
-    "get_principal": () -> (principal) query;
-    "create_applicant_profile": (ApplicantProfile) -> (nat8);
-    "create_company_profile": (CompanyProfile) -> (nat8);
+    "create_applicant_profile": (ApplicantParams, vec Skill) -> (nat8);
+    "create_company_profile": (CompanyParams) -> (nat8);
+
+    "create_job": (JobParams, vec Skill) -> (vec Skill);
+    "apply_to_job": (ApplicantParams) -> ();
+
+    "make_offer": (nat64, nat64, bool) -> ();
+    "accept_offer": (nat64, bool) -> ();
+
+    "cancel_job": (nat64) -> ();
+    "withdraw_application": (nat64) -> ();
+
     "get_company": (principal) -> (opt CompanyProfile) query;
+    "get_applicant": (principal) -> (opt ApplicantProfileResponse) query;
+    "get_job": (nat64) -> (opt JobResponse) query;
+    "get_application": (nat64) -> (opt Application) query;
+
+    "get_skill_list": (nat16, nat16) -> (opt vec Skill) query;
+    "get_job_list": (nat64, nat64) -> (opt vec JobResponse) query;
+    "get_application_list": (nat64, nat64) -> (opt vec Application) query;
+    "get_company_list": (nat64, nat64) -> (opt vec CompanyProfile) query;
+    "get_applicant_list": (nat64, nat64) -> (opt vec ApplicantProfileResponse) query;
+
+    "applicant_application_list": (nat64, nat64) -> (opt vec Application) query;
+    "company_application_list": (nat64, nat64) -> (opt vec Application) query;
 };
